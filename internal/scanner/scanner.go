@@ -7,67 +7,75 @@ import (
 	"strings"
 )
 
-// Port represents an open port with its protocol and process info.
+// Port represents a single listening network port.
 type Port struct {
 	Protocol string
 	Address  string
-	Port     int
-	State    string
+	PortNum  int
+}
+
+// PortKey returns a unique string key for a Port.
+func (p Port) PortKey() string {
+	return fmt.Sprintf("%s:%s:%d", p.Protocol, p.Address, p.PortNum)
 }
 
 // String returns a human-readable representation of a Port.
 func (p Port) String() string {
-	return fmt.Sprintf("%s:%d (%s)", p.Address, p.Port, p.Protocol)
+	return fmt.Sprintf("%s/%s:%d", p.Protocol, p.Address, p.PortNum)
 }
 
-// Key returns a unique identifier for the port.
-func (p Port) Key() string {
-	return fmt.Sprintf("%s/%s:%d", p.Protocol, p.Address, p.Port)
+// DiffResult holds the changes between two port snapshots.
+type DiffResult struct {
+	Added   []Port
+	Removed []Port
 }
 
-// Scanner defines the interface for port scanning backends.
+// HasChanges returns true if there are any added or removed ports.
+func (d DiffResult) HasChanges() bool {
+	return len(d.Added) > 0 || len(d.Removed) > 0
+}
+
+// Scanner is the interface implemented by port scanning backends.
 type Scanner interface {
 	Scan() ([]Port, error)
 }
 
-// ParseAddress splits a combined host:port string into its components.
-func ParseAddress(addr string) (host string, port int, err error) {
-	host, portStr, err := net.SplitHostPort(addr)
+// ParseAddress parses a combined "host:port" string into its components.
+func ParseAddress(raw string) (host string, port int, err error) {
+	raw = strings.TrimSpace(raw)
+	h, p, err := net.SplitHostPort(raw)
 	if err != nil {
-		// Try treating the whole string as a port number
-		portStr = addr
-		host = ""
+		return "", 0, fmt.Errorf("invalid address %q: %w", raw, err)
 	}
-	portStr = strings.TrimSpace(portStr)
-	port, err = strconv.Atoi(portStr)
+	portNum, err := strconv.Atoi(p)
 	if err != nil {
-		return "", 0, fmt.Errorf("invalid port %q: %w", portStr, err)
+		return "", 0, fmt.Errorf("invalid port in %q: %w", raw, err)
 	}
-	if port < 1 || port > 65535 {
-		return "", 0, fmt.Errorf("port %d out of valid range (1-65535)", port)
-	}
-	return host, port, nil
+	return h, portNum, nil
 }
 
-// Diff computes added and removed ports between two snapshots.
-func Diff(previous, current []Port) (added, removed []Port) {
-	prevMap := make(map[string]Port, len(previous))
+// Diff compares two port snapshots and returns what was added or removed.
+func Diff(previous, current []Port) DiffResult {
+	prev := make(map[string]Port, len(previous))
 	for _, p := range previous {
-		prevMap[p.Key()] = p
+		prev[p.PortKey()] = p
 	}
-	currMap := make(map[string]Port, len(current))
+
+	curr := make(map[string]Port, len(current))
 	for _, p := range current {
-		currMap[p.Key()] = p
+		curr[p.PortKey()] = p
 	}
-	for key, p := range currMap {
-		if _, exists := prevMap[key]; !exists {
-			added = append(added, p)
+
+	var result DiffResult
+	for k, p := range curr {
+		if _, exists := prev[k]; !exists {
+			result.Added = append(result.Added, p)
 		}
 	}
-	for key, p := range prevMap {
-		if _, exists := currMap[key]; !exists {
-			removed = append(removed, p)
+	for k, p := range prev {
+		if _, exists := curr[k]; !exists {
+			result.Removed = append(result.Removed, p)
 		}
 	}
-	return added, removed
+	return result
 }
