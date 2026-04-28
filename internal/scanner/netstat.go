@@ -57,6 +57,10 @@ func parseNetstatOutput(data []byte) ([]Port, error) {
 		if err != nil {
 			continue
 		}
+		// On Linux, netstat -tlnup includes a State column; skip non-listening rows.
+		if runtime.GOOS != "darwin" && !isListeningState(fields) {
+			continue
+		}
 		p := Port{
 			Protocol: proto,
 			Address:  host,
@@ -72,4 +76,15 @@ func parseNetstatOutput(data []byte) ([]Port, error) {
 		return nil, fmt.Errorf("reading netstat output: %w", err)
 	}
 	return ports, nil
+}
+
+// isListeningState checks whether a parsed netstat line represents a listening
+// socket by looking for a "LISTEN" state field anywhere in the fields slice.
+func isListeningState(fields []string) bool {
+	for _, f := range fields {
+		if strings.EqualFold(f, "listen") {
+			return true
+		}
+	}
+	return false
 }
