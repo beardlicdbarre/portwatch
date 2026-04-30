@@ -7,64 +7,80 @@ import (
 
 	"github.com/user/portwatch/internal/alert"
 	"github.com/user/portwatch/internal/config"
+	"github.com/user/portwatch/internal/filter"
+	"github.com/user/portwatch/internal/ratelimit"
 	"github.com/user/portwatch/internal/scanner"
+	"github.com/user/portwatch/internal/snapshot"
 )
 
-// Daemon runs the port monitoring loop.
+// Daemon orchestrates periodic port scanning and alerting.
 type Daemon struct {
-	cfg     *config.Config
-	scanner scanner.Scanner
+	cfg      *config.Config
+	scanner  scanner.Scanner
+	store    *snapshot.Store
 	notifier *alert.Notifier
+	filter   *filter.Filter
+	limiter  *ratelimit.Limiter
 }
 
-// New creates a new Daemon with the given configuration.
-func New(cfg *config.Config, sc scanner.Scanner, n *alert.Notifier) *Daemon {
+// New creates a Daemon wired with all dependencies.
+func New(cfg *config.Config, sc scanner.Scanner, store *snapshot.Store, n *alert.Notifier, f *filter.Filter) *Daemon {
 	return &Daemon{
-		cfg:      cfg,
-		scanner:  sc,
+		cfg:     cfg,
+		scanner: sc,
+		store:   store,
 		notifier: n,
+		filter:  f,
+		limiter: ratelimit.New(cfg.AlertCooldown),
 	}
 }
 
-// Run starts the monitoring loop and blocks until ctx is cancelled.
-// It performs an initial scan to establish a baseline, then scans at
-// the interval defined in cfg. Any changes detected between scans are
-// forwarded to the notifier. Scan or notify errors are logged but do
-// not stop the loop; only context cancellation causes Run to return.
+// Run starts the scan loop and blocks until ctx is cancelled.
 func (d *Daemon) Run(ctx context.Context) error {
-	prev, err := d.scanner.Scan()
-	if err != nil {
-		return err
-	}
-	log.Printf("portwatch: initial scan found %d open ports", len(prev))
-
 	ticker := time.NewTicker(d.cfg.Interval)
 	defer ticker.Stop()
+
+	prev, err := d.store.Load()
+	if err != nil {
+		log.Printf("portwatch: no previous snapshot, starting fresh: %v", err)
+		prev = nil
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("portwatch: shutting down")
 			return ctx.Err()
 		case <-ticker.C:
-			d.tick(ctx, &prev)
+			prev = d.tick(prev)
 		}
 	}
 }
 
-// tick performs a single scan cycle: scans ports, diffs against prev,
-// notifies on changes, and updates prev to the current snapshot.
-func (d *Daemon) tick(ctx context.Context, prev *scanner.PortSet) {
-	curr, err := d.scanner.Scan()
+func (d *Daemon) tick(prev []scanner.Port) []scanner.Port {
+	current, err := d.scanner.Scan()
 	if err != nil {
 		log.Printf("portwatch: scan error: %v", err)
-		return
+		return prev
 	}
-	diff := scanner.Diff(*prev, curr)
-	if len(diff.Opened)+len(diff.Closed) > 0 {
-		if err := d.notifier.Notify(diff); err != nil {
-			log.Printf("portwatch: notify error: %v", err)
+
+	current = d.filter.Apply(current)
+	diff := scanner.Diff(prev, current)
+
+	for _, p := range diff.Added {
+		if d.limiter.Allow(p.Key()) {
+			d.notifier.Notify(diff)
+			break
 		}
 	}
-	*prev = curr
+	for _, p := range diff.Removed {
+		if d.limiter.Allow(p.Key()) {
+			d.notifier.Notify(diff)
+			break
+		}
+	}
+
+	if err := d.store.Save(current); err != nil {
+		log.Printf("portwatch: snapshot save error: %v", err)
+	}
+	return current
 }
