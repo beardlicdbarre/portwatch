@@ -39,6 +39,11 @@ func (f *Filter) FilterDiff(added, removed []scanner.Port) ([]scanner.Port, []sc
 	return filterSlice(f, added), filterSlice(f, removed)
 }
 
+// Len returns the number of rules in the filter.
+func (f *Filter) Len() int {
+	return len(f.rules)
+}
+
 func filterSlice(f *Filter, ports []scanner.Port) []scanner.Port {
 	out := make([]scanner.Port, 0, len(ports))
 	for _, p := range ports {
