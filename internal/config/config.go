@@ -60,9 +60,17 @@ func (c *Config) Validate() error {
 	if c.Interval <= 0 {
 		return fmt.Errorf("config: interval must be positive, got %v", c.Interval)
 	}
+	if len(c.Protocols) == 0 {
+		return fmt.Errorf("config: at least one protocol must be specified")
+	}
 	for _, p := range c.Protocols {
 		if p != "tcp" && p != "udp" {
 			return fmt.Errorf("config: unsupported protocol %q (must be tcp or udp)", p)
+		}
+	}
+	for _, port := range c.IgnorePorts {
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("config: ignore_ports contains invalid port number %d (must be 1-65535)", port)
 		}
 	}
 	return nil
