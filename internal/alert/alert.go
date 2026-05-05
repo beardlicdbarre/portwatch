@@ -67,6 +67,19 @@ func (n *Notifier) Notify(diff scanner.DiffResult) error {
 	return nil
 }
 
+// NotifyInfo writes an informational alert with the given message and port.
+// This is useful for surfacing non-critical observations, such as scan
+// completion summaries or unchanged port states.
+func (n *Notifier) NotifyInfo(message string, p scanner.Port) error {
+	a := Alert{
+		Timestamp: time.Now(),
+		Level:     LevelInfo,
+		Message:   message,
+		Port:      p,
+	}
+	return n.write(a)
+}
+
 func (n *Notifier) write(a Alert) error {
 	_, err := fmt.Fprintf(
 		n.Writer,
